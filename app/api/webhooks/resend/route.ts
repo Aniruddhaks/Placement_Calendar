@@ -1,6 +1,6 @@
 import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
-import crypto from 'crypto';
+import { Resend } from 'resend';
 
 export async function POST(request: Request) {
   try {
@@ -20,46 +20,19 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
     }
 
-    // Debug: log secret info without exposing it
-    console.log('[Resend Webhook] Secret length:', webhookSecret.length);
-    console.log('[Resend Webhook] Secret starts with:', webhookSecret.substring(0, 10));
-
-    // Resend/Svix secrets are base64-encoded in the dashboard
-    let decodedSecret: Buffer;
-    try {
-      decodedSecret = Buffer.from(webhookSecret, 'base64');
-      console.log('[Resend Webhook] Decoded secret length:', decodedSecret.length);
-    } catch (e) {
-      console.error('[Resend Webhook] Failed to decode base64 secret');
-      return NextResponse.json({ error: 'Invalid secret format' }, { status: 500 });
-    }
-
     const rawBody = await request.text();
     
-    // Check timestamp to prevent replay attacks (5 minutes tolerance)
-    const now = Math.floor(Date.now() / 1000);
-    if (Math.abs(now - parseInt(svixTimestamp)) > 300) {
-      console.error('[Resend Webhook] Signature timestamp too old');
-      return NextResponse.json({ error: 'Signature expired' }, { status: 401 });
-    }
-
-    // Create expected signature using svix format
-    const payload = `${svixId}.${svixTimestamp}.${rawBody}`;
-    const expectedSignature = crypto
-      .createHmac('sha256', decodedSecret)
-      .update(payload)
-      .digest('base64');
-
-    // Svix signatures are comma-separated
-    const signatures = svixSignature.split(',').map(s => s.trim());
-    console.log('[Resend Webhook] Expected signature:', expectedSignature.substring(0, 20) + '...');
-    console.log('[Resend Webhook] Received signatures count:', signatures.length);
-    console.log('[Resend Webhook] First received signature:', signatures[0]?.substring(0, 20) + '...');
-    
-    if (!signatures.includes(expectedSignature)) {
-      console.error('[Resend Webhook] Invalid signature');
-      return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
-    }
+    // Verify webhook using Resend SDK
+    const resend = new Resend('');
+    const result = resend.webhooks.verify({
+      payload: rawBody,
+      headers: {
+        id: svixId,
+        timestamp: svixTimestamp,
+        signature: svixSignature,
+      },
+      webhookSecret,
+    });
 
     // Parse and log the webhook payload
     let webhookData;
