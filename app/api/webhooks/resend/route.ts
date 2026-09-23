@@ -20,6 +20,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
     }
 
+    // Resend/Svix secrets are base64-encoded in the dashboard
+    const decodedSecret = Buffer.from(webhookSecret, 'base64');
+
     const rawBody = await request.text();
     
     // Check timestamp to prevent replay attacks (5 minutes tolerance)
@@ -32,7 +35,7 @@ export async function POST(request: Request) {
     // Create expected signature using svix format
     const payload = `${svixId}.${svixTimestamp}.${rawBody}`;
     const expectedSignature = crypto
-      .createHmac('sha256', webhookSecret)
+      .createHmac('sha256', decodedSecret)
       .update(payload)
       .digest('base64');
 
