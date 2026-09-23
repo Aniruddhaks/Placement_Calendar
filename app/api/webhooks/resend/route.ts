@@ -20,8 +20,19 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
     }
 
+    // Debug: log secret info without exposing it
+    console.log('[Resend Webhook] Secret length:', webhookSecret.length);
+    console.log('[Resend Webhook] Secret starts with:', webhookSecret.substring(0, 10));
+
     // Resend/Svix secrets are base64-encoded in the dashboard
-    const decodedSecret = Buffer.from(webhookSecret, 'base64');
+    let decodedSecret: Buffer;
+    try {
+      decodedSecret = Buffer.from(webhookSecret, 'base64');
+      console.log('[Resend Webhook] Decoded secret length:', decodedSecret.length);
+    } catch (e) {
+      console.error('[Resend Webhook] Failed to decode base64 secret');
+      return NextResponse.json({ error: 'Invalid secret format' }, { status: 500 });
+    }
 
     const rawBody = await request.text();
     
@@ -41,6 +52,10 @@ export async function POST(request: Request) {
 
     // Svix signatures are comma-separated
     const signatures = svixSignature.split(',').map(s => s.trim());
+    console.log('[Resend Webhook] Expected signature:', expectedSignature.substring(0, 20) + '...');
+    console.log('[Resend Webhook] Received signatures count:', signatures.length);
+    console.log('[Resend Webhook] First received signature:', signatures[0]?.substring(0, 20) + '...');
+    
     if (!signatures.includes(expectedSignature)) {
       console.error('[Resend Webhook] Invalid signature');
       return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
