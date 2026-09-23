@@ -1,21 +1,13 @@
-import { HomeDashboard } from '@/components/dashboard/home-dashboard';
+import { ShortlistsSection } from '@/components/shortlists/shortlists-section';
 import {
   getAllEventsServer,
   getPublishedShortlistsServer,
-  getUpcomingEventsServer,
 } from '@/lib/events/queries';
 import type { PlacementEvent, Shortlist } from '@/types/events';
 
-export default async function HomePage() {
-  let events: PlacementEvent[] = [];
+export default async function ShortlistsPage() {
   let shortlists: Shortlist[] = [];
-  let allEvents: PlacementEvent[] = [];
-
-  try {
-    events = await getUpcomingEventsServer();
-  } catch {
-    events = [];
-  }
+  let events: PlacementEvent[] = [];
 
   try {
     shortlists = await getPublishedShortlistsServer();
@@ -24,28 +16,29 @@ export default async function HomePage() {
   }
 
   try {
-    allEvents = await getAllEventsServer();
+    events = await getAllEventsServer();
   } catch {
-    allEvents = [];
+    events = [];
   }
 
   const eventsById: Record<string, PlacementEvent> = {};
-  for (const event of allEvents) {
+  for (const event of events) {
     eventsById[event.id] = event;
   }
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Placement schedule</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Shortlists</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Upcoming OAs, technical interviews, and shortlist announcements, ordered by date.
+          Students shortlisted for placement rounds, announced by the placement cell.
         </p>
       </div>
-      <HomeDashboard
-        events={events}
+      <ShortlistsSection
         shortlists={shortlists}
         eventsById={eventsById}
+        title="All shortlists"
+        showViewAll={false}
       />
     </div>
   );

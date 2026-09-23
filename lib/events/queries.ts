@@ -2,7 +2,12 @@ import { format } from 'date-fns';
 import { createClient } from '@/lib/supabase/client';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { getNowIST } from '@/lib/utils/date';
-import type { PlacementEvent, PlacementEventInput } from '@/types/events';
+import type {
+  PlacementEvent,
+  PlacementEventInput,
+  Shortlist,
+  ShortlistInput,
+} from '@/types/events';
 
 function todayIST(): string {
   return format(getNowIST(), 'yyyy-MM-dd');
@@ -133,6 +138,124 @@ export async function deleteEvent(id: string): Promise<void> {
   
   const { error } = await supabase
     .from('events')
+    .delete()
+    .eq('id', id);
+
+  if (error) throw error;
+}
+
+export async function setEventStatus(
+  id: string,
+  status: 'draft' | 'published'
+): Promise<PlacementEvent> {
+  const supabase = await createServerSupabaseClient();
+
+  const { data, error } = await supabase
+    .from('events')
+    .update({ status, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+// ── Shortlists (server only, admin + public) ──
+
+export async function getAllShortlistsServer(): Promise<Shortlist[]> {
+  const supabase = await createServerSupabaseClient();
+
+  const { data, error } = await supabase
+    .from('shortlists')
+    .select('*')
+    .order('announcement_date', { ascending: false });
+
+  if (error) throw error;
+  return data || [];
+}
+
+export async function getPublishedShortlistsServer(): Promise<Shortlist[]> {
+  const supabase = await createServerSupabaseClient();
+
+  const { data, error } = await supabase
+    .from('shortlists')
+    .select('*')
+    .eq('status', 'published')
+    .order('announcement_date', { ascending: false });
+
+  if (error) throw error;
+  return data || [];
+}
+
+export async function getShortlistByIdServer(id: string): Promise<Shortlist | null> {
+  const supabase = await createServerSupabaseClient();
+
+  const { data, error } = await supabase
+    .from('shortlists')
+    .select('*')
+    .eq('id', id)
+    .single();
+
+  if (error) {
+    if (error.code === 'PGRST116') return null;
+    throw error;
+  }
+  return data;
+}
+
+export async function createShortlist(input: ShortlistInput): Promise<Shortlist> {
+  const supabase = await createServerSupabaseClient();
+
+  const { data, error } = await supabase
+    .from('shortlists')
+    .insert(input)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function updateShortlist(
+  id: string,
+  input: Partial<ShortlistInput>
+): Promise<Shortlist> {
+  const supabase = await createServerSupabaseClient();
+
+  const { data, error } = await supabase
+    .from('shortlists')
+    .update({ ...input, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function setShortlistStatus(
+  id: string,
+  status: 'draft' | 'published'
+): Promise<Shortlist> {
+  const supabase = await createServerSupabaseClient();
+
+  const { data, error } = await supabase
+    .from('shortlists')
+    .update({ status, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteShortlist(id: string): Promise<void> {
+  const supabase = await createServerSupabaseClient();
+
+  const { error } = await supabase
+    .from('shortlists')
     .delete()
     .eq('id', id);
 

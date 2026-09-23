@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import Link from 'next/link';
-import { Pencil, Trash2 } from 'lucide-react';
+import { Eye, EyeOff, Pencil, Trash2 } from 'lucide-react';
 import { EventBadge } from '@/components/events/event-badge';
 import {
   AlertDialog,
@@ -15,12 +15,31 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
-import { deleteEventAction } from '@/lib/events/actions';
+import { deleteEventAction, setEventStatusAction } from '@/lib/events/actions';
 import { formatEventDate, formatTime } from '@/lib/utils/date';
 import type { PlacementEvent } from '@/types/events';
 
 interface EventTableProps {
   events: PlacementEvent[];
+}
+
+function StatusBadge({ status }: { status: PlacementEvent['status'] }) {
+  const draft = status === 'draft';
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
+        draft
+          ? 'bg-amber-100 text-amber-800'
+          : 'bg-emerald-100 text-emerald-800'
+      }`}
+    >
+      <span
+        className={`size-1.5 rounded-full ${draft ? 'bg-amber-600' : 'bg-emerald-600'}`}
+        aria-hidden="true"
+      />
+      {draft ? 'Draft' : 'Published'}
+    </span>
+  );
 }
 
 export function EventTable({ events }: EventTableProps) {
@@ -38,13 +57,14 @@ export function EventTable({ events }: EventTableProps) {
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card">
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[640px] text-left text-sm">
+        <table className="w-full min-w-[720px] text-left text-sm">
           <thead className="border-b border-border bg-muted/40 text-xs uppercase tracking-wider text-muted-foreground">
             <tr>
               <th className="px-4 py-3 font-medium">Company</th>
               <th className="px-4 py-3 font-medium">Type</th>
               <th className="px-4 py-3 font-medium">Date</th>
               <th className="px-4 py-3 font-medium">Time</th>
+              <th className="px-4 py-3 font-medium">Status</th>
               <th className="px-4 py-3 font-medium text-right">Actions</th>
             </tr>
           </thead>
@@ -60,6 +80,39 @@ export function EventTable({ events }: EventTableProps) {
                 </td>
                 <td className="px-4 py-3">{formatEventDate(event.event_date)}</td>
                 <td className="px-4 py-3">{formatTime(event.start_time) || '—'}</td>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <StatusBadge status={event.status} />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={isPending}
+                      onClick={() => {
+                        startTransition(async () => {
+                          await setEventStatusAction(
+                            event.id,
+                            event.status === 'published' ? 'draft' : 'published'
+                          );
+                        });
+                      }}
+                      aria-label={
+                        event.status === 'published'
+                          ? `Unpublish ${event.company_name}`
+                          : `Publish ${event.company_name}`
+                      }
+                    >
+                      {event.status === 'published' ? (
+                        <>
+                          <EyeOff /> Unpublish
+                        </>
+                      ) : (
+                        <>
+                          <Eye /> Publish
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </td>
                 <td className="px-4 py-3">
                   <div className="flex justify-end gap-2">
                     <Button
@@ -87,7 +140,7 @@ export function EventTable({ events }: EventTableProps) {
                         <AlertDialogHeader>
                           <AlertDialogTitle>Delete this event?</AlertDialogTitle>
                           <AlertDialogDescription>
-                            {event.company_name} — {event.role} will be removed from the public calendar.
+                            {event.company_name} — {event.role} will be removed permanently.
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>

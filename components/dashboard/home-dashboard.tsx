@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Filters } from '@/components/dashboard/filters';
 import { NextUpCard } from '@/components/dashboard/next-up-card';
 import { UpcomingEvents } from '@/components/dashboard/upcoming-events';
+import { ShortlistsSection } from '@/components/shortlists/shortlists-section';
 import { EventDetail } from '@/components/events/event-detail';
 import {
   Sheet,
@@ -13,13 +14,19 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import { filterEvents } from '@/lib/events/filter';
-import type { EventFilters, PlacementEvent } from '@/types/events';
+import type {
+  EventFilters,
+  PlacementEvent,
+  Shortlist,
+} from '@/types/events';
 
 interface HomeDashboardProps {
   events: PlacementEvent[];
+  shortlists?: Shortlist[];
+  eventsById?: Record<string, PlacementEvent>;
 }
 
-export function HomeDashboard({ events }: HomeDashboardProps) {
+export function HomeDashboard({ events, shortlists = [], eventsById = {} }: HomeDashboardProps) {
   const [filters, setFilters] = useState<EventFilters>({
     eventType: 'ALL',
     timeRange: 'ALL',
@@ -58,6 +65,7 @@ export function HomeDashboard({ events }: HomeDashboardProps) {
             onEventClick={setSelectedEvent}
           />
         </section>
+        <ShortlistsSection shortlists={shortlists} eventsById={eventsById} />
       </div>
 
       <aside className="hidden lg:block">
