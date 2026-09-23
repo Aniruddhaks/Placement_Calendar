@@ -29,8 +29,36 @@ export async function POST(request: Request) {
       .update(payload)
       .digest('base64');
 
-    const signatures = svixSignature.split(',').map(s => s.trim());
-    if (!signatures.includes(expectedSignature)) {
+    // Parse svix-signature header (format: "v1,signature1,v2,signature2,...")
+    const signatureEntries = svixSignature.split(',');
+    let signatureMatch = false;
+    
+    for (let i = 0; i < signatureEntries.length; i += 2) {
+      const version = signatureEntries[i];
+      const signature = signatureEntries[i + 1];
+      
+      if (version === 'v1' && signature) {
+        // Use timing-safe comparison
+        const expectedBuffer = Buffer.from(expectedSignature);
+        const receivedBuffer = Buffer.from(signature);
+        
+        if (expectedBuffer.length === receivedBuffer.length) {
+          let match = true;
+          for (let j = 0; j < expectedBuffer.length; j++) {
+            if (expectedBuffer[j] !== receivedBuffer[j]) {
+              match = false;
+              break;
+            }
+          }
+          if (match) {
+            signatureMatch = true;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!signatureMatch) {
       console.error('[Resend Webhook] Invalid signature');
       return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
     }
