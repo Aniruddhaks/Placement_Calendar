@@ -1,6 +1,6 @@
 import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
-import { Resend } from 'resend';
+import crypto from 'crypto';
 
 export async function POST(request: Request) {
   try {
@@ -22,17 +22,18 @@ export async function POST(request: Request) {
 
     const rawBody = await request.text();
     
-    // Verify webhook using Resend SDK
-    const resend = new Resend('');
-    const result = resend.webhooks.verify({
-      payload: rawBody,
-      headers: {
-        id: svixId,
-        timestamp: svixTimestamp,
-        signature: svixSignature,
-      },
-      webhookSecret,
-    });
+    // Verify webhook using Svix-compatible verification
+    const payload = `${svixId}.${svixTimestamp}.${rawBody}`;
+    const expectedSignature = crypto
+      .createHmac('sha256', webhookSecret)
+      .update(payload)
+      .digest('base64');
+
+    const signatures = svixSignature.split(',').map(s => s.trim());
+    if (!signatures.includes(expectedSignature)) {
+      console.error('[Resend Webhook] Invalid signature');
+      return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
+    }
 
     // Parse and log the webhook payload
     let webhookData;
