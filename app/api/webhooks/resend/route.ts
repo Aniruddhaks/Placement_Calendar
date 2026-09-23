@@ -193,6 +193,9 @@ export async function POST(request: Request) {
 
     console.log('[Resend Webhook] Webhook verified');
 
+    const eventType: string = webhookData.type ?? 'unknown';
+    console.log('[Resend Webhook] Event type:', eventType);
+
     const emailData = webhookData.data ?? {};
     const emailId: string | undefined = emailData.email_id;
     const payloadMessageId: string | null = emailData.message_id || null;
@@ -233,6 +236,10 @@ export async function POST(request: Request) {
 
     const resendApiKey = process.env.RESEND_API_KEY;
     if (resendApiKey && emailId) {
+      console.log('[Resend Webhook] Retrieving: fetching full email content from Resend API', {
+        email_id: emailId,
+        has_api_key: true,
+      });
       const resend = new Resend(resendApiKey);
       const fetched = await fetchReceivedEmail(resend, emailId);
       if (fetched) {
@@ -266,6 +273,13 @@ export async function POST(request: Request) {
         '[Resend Webhook] RESEND_API_KEY not configured; parsing subject-only content'
       );
     }
+
+    console.log('[Resend Webhook] Email retrieved:', {
+      message_id: messageId,
+      body_length: bodyText.length,
+      body_source: bodyText ? (bodyText === emailData.text ? 'webhook-payload' : 'resend-fetch') : 'none',
+      attachment_count: attachments.length,
+    });
 
     const emailType = detectEmailType(subject, bodyText);
     console.log('[Resend Webhook] Email classification:', emailType);
