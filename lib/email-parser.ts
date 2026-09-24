@@ -217,7 +217,7 @@ function findDateCandidates(text: string): DateCandidate[] {
     let match: RegExpExecArray | null;
     while ((match = rx.exec(text)) !== null) {
       const value = parse(match);
-      if (value) {
+      if (value && !isEmailHeaderField(text, match.index)) {
         candidates.push({ value, index: match.index });
       }
       if (match.index === rx.lastIndex) rx.lastIndex += 1;
@@ -230,6 +230,14 @@ function findDateCandidates(text: string): DateCandidate[] {
 
 const EVENT_DATE_CONTEXT =
   /\b(date|day|held|conducted|scheduled|scheduled on|round|drive|test|interview|assessment|starting|starts|begins|program|event)\b/i;
+
+const EMAIL_HEADER_FIELD =
+  /^(?:from|to|cc|bcc|date|subject|sent|received|reply-to|message-id|in-reply-to|references|mime-version|content-type|sender|return-path|delivered-to|dkim-signature|authentication-results)\s*:\s*/i;
+
+function isEmailHeaderField(text: string, start: number): boolean {
+  const lineStart = text.lastIndexOf('\n', start - 1) + 1;
+  return EMAIL_HEADER_FIELD.test(text.slice(lineStart, start));
+}
 
 const DEADLINE_CONTEXT =
   /\b(deadline|last\s*date|last\s*day|apply|register|registration|submit|submission|before|closes|closure|by\s)\b/i;
