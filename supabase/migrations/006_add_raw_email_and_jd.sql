@@ -23,7 +23,8 @@ values (
 on conflict (id) do update
   set public = false, file_size_limit = 20971520;
 
-alter table storage.objects enable row level security;
+-- RLS is already enabled on storage.objects by default in Supabase; only the
+-- policies below are needed (policies do not require table ownership).
 
 drop policy if exists "public can read jds for published events" on storage.objects;
 create policy "public can read jds for published events"
