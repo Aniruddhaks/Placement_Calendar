@@ -14,6 +14,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import { filterEvents } from '@/lib/events/filter';
+import { isEventUpcoming } from '@/lib/utils/date';
 import type {
   EventFilters,
   PlacementEvent,
@@ -48,7 +49,8 @@ export function HomeDashboard({ events, shortlists = [], eventsById = {} }: Home
     [events, filters]
   );
 
-  const nextEvent = filteredEvents[0] ?? null;
+  const nextEvent =
+    filteredEvents.find((event) => isEventUpcoming(event.event_date)) ?? null;
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">

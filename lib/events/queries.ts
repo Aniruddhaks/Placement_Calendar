@@ -1,7 +1,5 @@
-import { format } from 'date-fns';
 import { createClient } from '@/lib/supabase/client';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
-import { getNowIST } from '@/lib/utils/date';
 import type {
   PlacementEvent,
   PlacementEventInput,
@@ -9,20 +7,15 @@ import type {
   ShortlistInput,
 } from '@/types/events';
 
-function todayIST(): string {
-  return format(getNowIST(), 'yyyy-MM-dd');
-}
-
 // ── Public queries (can run on client or server) ──
 
 export async function getUpcomingEvents(): Promise<PlacementEvent[]> {
   const supabase = createClient();
-  const today = todayIST();
   
   const { data, error } = await supabase
     .from('events')
     .select('*')
-    .gte('event_date', today)
+    .eq('status', 'published')
     .order('event_date', { ascending: true })
     .order('start_time', { ascending: true });
 
@@ -32,12 +25,11 @@ export async function getUpcomingEvents(): Promise<PlacementEvent[]> {
 
 export async function getUpcomingEventsServer(): Promise<PlacementEvent[]> {
   const supabase = await createServerSupabaseClient();
-  const today = todayIST();
   
   const { data, error } = await supabase
     .from('events')
     .select('*')
-    .gte('event_date', today)
+    .eq('status', 'published')
     .order('event_date', { ascending: true })
     .order('start_time', { ascending: true });
 
