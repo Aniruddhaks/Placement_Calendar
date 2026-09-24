@@ -2,7 +2,8 @@ import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { Webhook } from 'svix';
 import { Resend } from 'resend';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { cleanEmailBody } from '@/lib/email-cleaner';
 import {
   buildEventDedupKey,
   buildShortlistDedupKey,
@@ -10,6 +11,7 @@ import {
   parsePlacementEvent,
   parseShortlist,
 } from '@/lib/email-parser';
+import type { AdditionalDetails } from '@/types/events';
 
 export const maxDuration = 60;
 
@@ -168,6 +170,110 @@ const TEXT_ATTACHMENT_TYPES = new Set([
   'application/octet-stream',
 ]);
 
+const JD_ATTACHMENT_TYPES = new Set([
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.oasis.opendocument.text',
+  'application/rtf',
+  'text/rtf',
+  'text/plain',
+]);
+
+const JD_FILENAME_HINT =
+  /(job[-_ ]?description|\bjd\b|\bdescription\b|roles?|responsibilities|profile)/i;
+
+function sanitizeFilename(filename: string | null): string {
+  const base = (filename || 'job-description')
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .slice(0, 120);
+  return base || 'job-description';
+}
+
+async function downloadAttachmentBytes(
+  resend: Resend,
+  emailId: string,
+  attachment: ResendAttachmentInfo
+): Promise<ArrayBuffer | Blob | null> {
+  try {
+    const res = await withTimeout(
+      resend.emails.receiving.attachments.get({
+        emailId,
+        id: attachment.id,
+      }),
+      15_000
+    );
+    if (res.error || !res.data?.download_url) return null;
+
+    const download = await fetch(res.data.download_url, {
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!download.ok) return null;
+
+    return await download.arrayBuffer();
+  } catch (error) {
+    if (error instanceof ResendTimeoutError) {
+      console.error('[Resend Webhook] Resend attachment retrieval timed out');
+    } else {
+      console.error(
+        `[Resend Webhook] Error downloading attachment ${attachment.filename ?? attachment.id}:`,
+        error
+      );
+    }
+    return null;
+  }
+}
+
+async function storeEventJd(
+  supabase: SupabaseClient,
+  resend: Resend,
+  emailId: string,
+  eventId: string,
+  attachments: ResendAttachmentInfo[]
+): Promise<void> {
+  const candidates = attachments.filter((a) => {
+    const type = a.content_type?.toLowerCase() || '';
+    const name = a.filename || '';
+    return JD_ATTACHMENT_TYPES.has(type) || JD_FILENAME_HINT.test(name);
+  });
+  if (candidates.length === 0) return;
+
+  const jdAttachment =
+    candidates.find((a) => JD_FILENAME_HINT.test(a.filename || '')) ??
+    candidates[0];
+
+  const bytes = await downloadAttachmentBytes(resend, emailId, jdAttachment);
+  if (!bytes) {
+    console.error('[Resend Webhook] JD download failed', jdAttachment.filename);
+    return;
+  }
+
+  const objectPath = `${eventId}/${sanitizeFilename(jdAttachment.filename)}`;
+  const { error: uploadError } = await supabase.storage
+    .from('jds')
+    .upload(objectPath, bytes, {
+      contentType: jdAttachment.content_type || 'application/octet-stream',
+      upsert: true,
+    });
+
+  if (uploadError) {
+    console.error('[Resend Webhook] JD upload to storage failed:', uploadError);
+    return;
+  }
+
+  const { error: updateError } = await supabase
+    .from('events')
+    .update({ job_description_url: objectPath })
+    .eq('id', eventId);
+
+  if (updateError) {
+    console.error('[Resend Webhook] Failed to record JD on event:', updateError);
+    return;
+  }
+
+  console.log('[Resend Webhook] JD attachment stored:', objectPath);
+}
+
 export async function POST(request: Request) {
   try {
     const headersList = await headers();
@@ -316,7 +422,16 @@ export async function POST(request: Request) {
       attachment_count: attachments.length,
     });
 
-    const emailType = detectEmailType(subject, bodyText);
+    // Clean/normalize the body once; parsing operates on the result while the
+    // original is preserved in raw_email for admin review.
+    const rawEmail = bodyText;
+    const body = cleanEmailBody(bodyText);
+    console.log('[Resend Webhook] Body cleaned:', {
+      raw_length: rawEmail.length,
+      cleaned_length: body.length,
+    });
+
+    const emailType = detectEmailType(subject, body);
     console.log('[Resend Webhook] Email classification:', emailType);
 
     const attachmentNames = attachments
@@ -329,7 +444,7 @@ export async function POST(request: Request) {
     }
 
     if (emailType === 'EVENT') {
-      const parsedEvent = parsePlacementEvent(subject, bodyText, sourceEmailId);
+      const parsedEvent = parsePlacementEvent(subject, body, sourceEmailId);
       if (!parsedEvent) {
         console.error(
           '[Resend Webhook] Parsing failed: could not extract company/event date; draft not created'
@@ -346,7 +461,7 @@ export async function POST(request: Request) {
         end_time: parsedEvent.end_time,
       });
 
-      const additionalDetails: Record<string, string> = {
+      const additionalDetails: AdditionalDetails = {
         ...(parsedEvent.additional_details ?? {}),
       };
       if (messageId && messageId !== sourceEmailId) {
@@ -362,13 +477,18 @@ export async function POST(request: Request) {
         additional_details:
           Object.keys(additionalDetails).length > 0 ? additionalDetails : null,
         dedup_key: dedupKey,
+        raw_email: rawEmail,
       };
 
       // Idempotency: the events.source_email_id and events.dedup_key unique
       // indexes enforce this atomically (see migration 004). Concurrent
       // deliveries that race here simply hit the unique-violation handler.
       console.log('[Resend Webhook] Inserting into Supabase (events)');
-      const { error: insertError } = await supabase.from('events').insert(record);
+      const { data: insertedEvent, error: insertError } = await supabase
+        .from('events')
+        .insert(record)
+        .select('id')
+        .single();
 
       if (insertError) {
         if (isUniqueViolation(insertError)) {
@@ -379,14 +499,17 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'Database error' }, { status: 500 });
       }
 
-      console.log('[Resend Webhook] Supabase insert successful (event draft)');
+      console.log('[Resend Webhook] Supabase insert successful (event draft):', insertedEvent);
+      if (insertedEvent && resendApiKey && emailId) {
+        await storeEventJd(supabase, new Resend(resendApiKey), emailId, insertedEvent.id, attachments);
+      }
       return NextResponse.json({ received: true, classification: 'EVENT' }, { status: 200 });
     }
 
     if (emailType === 'SHORTLIST') {
       const parsedShortlist = parseShortlist(
         subject,
-        bodyText,
+        body,
         sourceEmailId,
         announcementDate
       );

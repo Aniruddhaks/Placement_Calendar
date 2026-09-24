@@ -16,7 +16,10 @@ interface EventFormProps {
 function additionalDetailsText(event?: PlacementEvent) {
   if (!event?.additional_details) return '';
   return Object.entries(event.additional_details)
-    .map(([key, value]) => `${key}: ${value}`)
+    .map(([key, value]) => {
+      const text = Array.isArray(value) ? value.join(', ') : value;
+      return `${key}: ${text}`;
+    })
     .join('\n');
 }
 

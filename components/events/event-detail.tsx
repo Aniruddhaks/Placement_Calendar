@@ -1,3 +1,5 @@
+'use client';
+
 import type { PlacementEvent } from '@/types/events';
 import { EventBadge } from './event-badge';
 import { formatEventDateFull, formatTime, formatTimestamp } from '@/lib/utils/date';
@@ -12,6 +14,7 @@ import {
   FileText,
   Timer,
   X,
+  ExternalLink,
 } from 'lucide-react';
 
 interface EventDetailProps {
@@ -37,6 +40,13 @@ function DetailRow({ icon, label, value }: DetailRowProps) {
       </div>
     </div>
   );
+}
+
+function detailValue(value: string | string[]): string {
+  if (Array.isArray(value)) {
+    return value.map((item) => `• ${item}`).join('\n');
+  }
+  return value;
 }
 
 export function EventDetail({ event, onClose }: EventDetailProps) {
@@ -117,8 +127,15 @@ export function EventDetail({ event, onClose }: EventDetailProps) {
   // Additional JSONB details
   const additionalDetails = event.additional_details;
   const additionalEntries = additionalDetails
-    ? Object.entries(additionalDetails).filter(([, v]) => v && v.trim())
+    ? Object.entries(additionalDetails).filter(([, value]) => {
+        if (Array.isArray(value)) {
+          return value.some((item) => item && item.trim());
+        }
+        return value && value.trim();
+      })
     : [];
+
+  const showJd = event.status === 'published' && Boolean(event.job_description_url);
 
   return (
     <div className="bg-card rounded-xl border border-border overflow-hidden">
@@ -163,10 +180,27 @@ export function EventDetail({ event, onClose }: EventDetailProps) {
                 <span className="text-xs font-medium text-muted-foreground capitalize">
                   {key.replace(/_/g, ' ')}
                 </span>
-                <p className="text-sm text-foreground">{value}</p>
+                <p className="text-sm text-foreground whitespace-pre-line">
+                  {detailValue(value)}
+                </p>
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {showJd && (
+        <div className="px-5 pb-5">
+          <a
+            href={`/api/events/${event.id}/jd`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline"
+          >
+            <FileText className="w-4 h-4" />
+            Job Description
+            <ExternalLink className="w-3.5 h-3.5" />
+          </a>
         </div>
       )}
     </div>

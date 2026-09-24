@@ -1,4 +1,5 @@
 import type {
+  AdditionalDetails,
   PlacementEventInput,
   ShortlistInput,
   ShortlistStudent,
@@ -33,6 +34,7 @@ const GENERIC_COMPANY_WORDS = new Set([
   'placements',
   'drive',
   'recruitment',
+  'recruit',
   'hiring',
   'opportunity',
   'opportunities',
@@ -47,6 +49,13 @@ const GENERIC_COMPANY_WORDS = new Set([
   'campus',
   'overview',
   'greetings',
+  'fwd',
+  'fw',
+  're',
+  'openings',
+  'about',
+  'event',
+  'eligible',
 ]);
 
 const ROLE_HINTS =
@@ -93,33 +102,36 @@ export function buildShortlistDedupKey(
 
 /**
  * Classifies a PES placement email as a placement event, shortlist, or
- * unrelated/unknown email. Shortlist indicator words take priority because a
- * shortlist email will typically also mention a company.
+ * unrelated/unknown email. Shortlist detection is deliberately conservative:
+ * it requires strong announcing signals (subject-level keywords, an explicit
+ * shortened/selected-list declaration, or an attached/detailed student roster)
+ * so that transient mentions like "the company will share the shortlist later"
+ * never turn a normal placement announcement into a shortlist.
  */
 export function detectEmailType(subject: string, body: string): EmailType {
   const lowerSubject = subject.toLowerCase();
   const lowerBody = body.toLowerCase();
 
-  const shortlistKeywords = [
-    'shortlisted',
-    'shortlist',
-    'short listed',
-    'eligible/shortlisted',
-    'shortlisted candidates',
-    'shortlisted students',
-    'students shortlisted',
-    'shortlisted for interview',
-    'shortlisted for the',
-    'shortlisted for',
-  ];
+  if (/(?:shortlist|shortlisted|short listed|selected candidates|selected students|shortlisted (?:candidates|students|for|to))/i.test(lowerSubject)) {
+    return 'SHORTLIST';
+  }
 
-  for (const keyword of shortlistKeywords) {
-    if (
-      lowerSubject.includes(keyword) ||
-      lowerBody.includes(keyword)
-    ) {
-      return 'SHORTLIST';
-    }
+  const announcesShortlist =
+    /\b(?:the\s+)?shortlisted?\s+(?:candidates?|students?)\b/i.test(lowerBody) ||
+    /\b(?:following|below|herewith|attached|hereby)\b[^.]{0,80}\b(?:shortlisted?|selected)\b/i.test(lowerBody) ||
+    /\b(?:shortlisted?|selected)\b[^.]{0,80}\b(?:list of|students are|students have been|candidates are|candidates have been)\b/i.test(lowerBody) ||
+    /\b\d{1,4}\s+(?:students|candidates)\s+(?:have\s+been\s+)?shortlisted\b/i.test(lowerBody) ||
+    /\bshortlisted\s+(?:in|under|for)\s+/i.test(lowerBody);
+
+  const isFutureOnlyMention =
+    /\b(?:company|team|will|would|shall|be|to|may|might)\b(?:[^.\n]{0,60})\b(?:share|release|announce|post|intimate|inform|notify|send|update|communicate)\b/i.test(
+      lowerBody
+    ) &&
+    /\bshortlist|\bshortlisted/i.test(lowerBody) &&
+    !announcesShortlist;
+
+  if (announcesShortlist && !isFutureOnlyMention) {
+    return 'SHORTLIST';
   }
 
   const eventKeywords = [
@@ -236,7 +248,21 @@ const EMAIL_HEADER_FIELD =
 
 function isEmailHeaderField(text: string, start: number): boolean {
   const lineStart = text.lastIndexOf('\n', start - 1) + 1;
-  return EMAIL_HEADER_FIELD.test(text.slice(lineStart, start));
+  const prefix = text.slice(lineStart, start);
+  if (!EMAIL_HEADER_FIELD.test(prefix)) return false;
+
+  // Only treat the match as an email metadata header when it sits inside a
+  // header block — i.e. a neighboring line is also a known header field.
+  // Structured placement templates legitimately start values with "Date:",
+  // "Subject:", etc., so a lone label must still be parsed as content.
+  const blockStart = text.lastIndexOf('\n\n', start - 1);
+  const blockStartOffset = blockStart === -1 ? 0 : blockStart + 2;
+  const before = text.slice(blockStartOffset, start).split('\n');
+  before.pop();
+  for (let i = 0; i < before.length; i++) {
+    if (before[i].trim() && EMAIL_HEADER_FIELD.test(before[i])) return true;
+  }
+  return false;
 }
 
 const DEADLINE_CONTEXT =
@@ -365,25 +391,53 @@ function cleanLabel(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
+function isCompanyCandidate(value: string | undefined): boolean {
+  if (!value) return false;
+  const candidate = value
+    .replace(/^\s*(?:fwd|fw|re)\s*[:|\-–—]?\s*/i, '')
+    .trim();
+  if (candidate.length < 2 || candidate.length > 60) return false;
+  if (GENERIC_COMPANY_WORDS.has(candidate.toLowerCase())) return false;
+
+  const words = candidate.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  if (words.length > 0 && words.every((w) => GENERIC_COMPANY_WORDS.has(w))) {
+    return false;
+  }
+  return true;
+}
+
+const ROLE_SEGMENT_RX =
+  /^(?:sde|sde intern|software(?: engineer)?(?: intern)?|frontend|backend|full[- ]?stack(?: developer)?|developer(?: intern)?|engineer(?: intern)?|intern|internship|data(?: scientist| analyst| engineer)?|\bml\b|ai|ml engineer|ai engineer|devops|qa|tester|analyst|product(?: manager)?|designer|ux|consultant|associate|trainee|java(?: developer)?|python(?: developer)?|cloud(?: engineer)?|security(?: engineer)?|mobile(?: developer)?|react|node|dev)(?: intern)?$/i;
+
+function isRoleLikeSegment(segment: string): boolean {
+  return ROLE_SEGMENT_RX.test(segment.trim());
+}
+
 function extractCompany(subject: string, body: string): string | null {
   const bodyLines = body.split('\n').map((l) => l.trim()).filter(Boolean);
 
+  // Structured template fields: "Event:", "Company:", "Company Name:", "Organization:"
   const labeled =
     body.match(/\bcompany\s*(?:name)?\s*[:：]\s*([^\n]{2,80})/i) ||
+    body.match(/\bevent\s*[:：]\s*([^\n]{2,80})/i) ||
     subject.match(/\bcompany\s*(?:name)?\s*[:：]\s*([^\n]{2,80})/i);
-  if (labeled) {
-    return cleanLabel(labeled[1]);
+  if (labeled && isCompanyCandidate(labeled[1].split(/\s*[-–—|]\s*/)[0])) {
+    return cleanLabel(labeled[1].split(/\s*[-–—|]\s*/)[0]);
   }
 
   // "Acme Corp - SDE Intern - Online Assessment" → "Acme Corp"
-  const firstSegment = subject.split(/\s*[-–—|]\s*/)[0]?.trim();
-  if (
-    firstSegment &&
-    firstSegment.length >= 2 &&
-    firstSegment.length <= 60 &&
-    !GENERIC_COMPANY_WORDS.has(firstSegment.toLowerCase())
-  ) {
-    return firstSegment;
+  // Iterate all subject segments so generic/role/stage prefixes ("Fwd:",
+  // "Placement", "SDE Intern") are skipped in favor of the actual company.
+  const subjectSegments = subject
+    .replace(/^\s*(?:fwd|fw|fwd:|fw:|re|re:|\[fwd\]|\[re\])\s*[:|\-–—]?\s*/i, '')
+    .split(/\s*[-–—|]\s*/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const segment of subjectSegments) {
+    if (isCompanyCandidate(segment) && !isRoleLikeSegment(segment)) return segment;
+  }
+  for (const segment of subjectSegments) {
+    if (isCompanyCandidate(segment)) return segment;
   }
 
   // "hiring / drive / recruitment for Acme Corp"
@@ -392,19 +446,16 @@ function extractCompany(subject: string, body: string): string | null {
   );
   if (intro) {
     const company = cleanLabel(intro[1]);
-    if (company.length <= 60) return company;
+    if (isCompanyCandidate(company)) return company;
   }
 
   // First substantive body line, taking the first segment before a separator.
-  if (bodyLines.length > 0) {
-    const candidate = bodyLines[0].split(/\s*[-–—|]\s*/)[0]?.trim();
-    if (
-      candidate &&
-      candidate.length <= 60 &&
-      !GENERIC_COMPANY_WORDS.has(candidate.toLowerCase())
-    ) {
-      return candidate;
-    }
+  for (const line of bodyLines) {
+    const candidate = line.split(/\s*[-–—|]\s*/)[0]?.trim();
+    if (!candidate) continue;
+    if (/^[a-z]{2,30}[:：]/i.test(candidate)) continue;
+    if (/^\d{1,4}(?:st|nd|rd|th)?\s+[a-z]+\s*,?\s*\d{2,4}/i.test(candidate)) continue;
+    if (isCompanyCandidate(candidate)) return candidate;
   }
 
   return null;
@@ -453,20 +504,30 @@ function extractRole(subject: string, body: string): string | null {
   return null;
 }
 
+const EARLIEST_STAGE_PATTERNS: { type: 'OA' | 'TECHNICAL_INTERVIEW'; rx: RegExp }[] = [
+  {
+    type: 'OA',
+    rx: /online\s*(assessment|test)|assessment|online test|aptitude|written test|oa\b|hackerrank|hackerearth|coding\s*(test|assessment)|technical\s*(test|assessment)/i,
+  },
+  {
+    type: 'TECHNICAL_INTERVIEW',
+    rx: /technical\s*interview|\binterviews?\b|hiring\s*manager\s*interview|mr?\s*round|\bpi\b|personality\s*interview/i,
+  },
+];
+
 function extractEventType(subject: string, body: string): 'OA' | 'TECHNICAL_INTERVIEW' {
-  const text = `${subject}\n${body}`.toLowerCase();
+  const text = `${subject}\n${body}`;
 
-  const hasInterview =
-    /technical\s*interview|\binterviews?\b|hiring\s*manager\s*interview|mr?\s*round|\bpi\b|personality\s*interview/.test(
-      text
-    );
-  const hasAssessment =
-    /online\s*(assessment|test)|\bassessment\b|\bonline test\b|\btest\b|\boa\b|aptitude|hackerrank|hackerearth|technical\s*(test|assessment)/.test(
-      text
-    );
+  let earliest: { type: 'OA' | 'TECHNICAL_INTERVIEW'; index: number } | null = null;
+  for (const { type, rx } of EARLIEST_STAGE_PATTERNS) {
+    const match = rx.exec(text);
+    if (match && (!earliest || match.index < earliest.index)) {
+      earliest = { type, index: match.index };
+    }
+  }
 
-  if (hasInterview && !hasAssessment) return 'TECHNICAL_INTERVIEW';
-  return 'OA';
+  if (!earliest) return 'OA';
+  return earliest.type;
 }
 
 function extractMode(body: string): string | null {
@@ -488,10 +549,15 @@ function extractVenue(body: string): string | null {
 }
 
 function extractLocation(body: string): string | null {
-  const labeled =
-    body.match(/\b(?:location|city|job\s*location|work\s*location)\s*[:：]\s*([^\n]{2,80})/i) ||
-    body.match(/\b(?:based\s*in|located\s*in)\s+([A-Za-z][A-Za-z .'-]+?)(?:,\s*India)?\b/i);
-  if (labeled) return cleanLabel(labeled[0]);
+  const labeled = body.match(
+    /\b(?:location|city|job\s*location|work\s*location)\s*[:：]\s*([^\n]{2,80})/i
+  );
+  if (labeled) return cleanLabel(labeled[1]);
+
+  const basedIn = body.match(
+    /\b(?:based\s*in|located\s*in)\s+([A-Za-z][A-Za-z .'-]+?)(?:,\s*India)?\b/i
+  );
+  if (basedIn) return cleanLabel(basedIn[1]);
   return null;
 }
 
@@ -538,8 +604,13 @@ function extractDescription(body: string): string | null {
     .filter((p) => p.length > 10);
 
   for (const paragraph of paragraphs) {
-    if (/^dear|^hi |^hello|^greetings|^respect/i.test(paragraph)) continue;
-    if (/^(regards|thanks|thank you|warm|best|sent from)/i.test(paragraph)) break;
+    if (/^dear|^hi |^hello|^greetings|^respect|^subject|^event\s*details\b/i.test(paragraph)) continue;
+    if (/^(regards|thanks|thank you|warm|best|sent from|this is an? (auto|system))/i.test(paragraph)) break;
+    if (/^(you received|to unsubscribe|to view this discussion|google group)/i.test(paragraph)) continue;
+    if (/^https?:\/\//i.test(paragraph)) continue;
+    if (/(?:company|role|position|eligibility|location|stipend|ctc|rounds?|date|time|departments?|platform|mode|application deadline|venue)\s*[:：]\s*[^\n]{1,80}/i.test(paragraph) && !/\n/.test(paragraph)) {
+      continue;
+    }
     const cleaned = paragraph.replace(/\n{2,}/g, '\n').trim();
     if (cleaned.length > 0) {
       return cleaned.slice(0, 800);
@@ -548,29 +619,113 @@ function extractDescription(body: string): string | null {
   return null;
 }
 
-const EXTRA_LABELS: { key: string; rx: RegExp }[] = [
-  { key: 'department', rx: /\b(?:department|departments|branches?|streams?)\s*[:：]\s*([^\n]{2,120})/i },
-  { key: 'registration_link', rx: /\b(?:registration\s*link|register\s*here|click\s*here|link)\s*[:：]?\s*((?:https?:\/\/)?[^\s\n]{5,120})/i },
-  { key: 'rounds', rx: /\brounds?\s*[:：]\s*([^\n]{2,80})/i },
-  { key: 'platform', rx: /\bplatform\s*[:：]\s*([^\n]{2,80})/i },
+const EXTRA_LABELS: { key: string; rx: RegExp; list?: boolean }[] = [
+  { key: 'departments', rx: /\b(?:department|departments|depts|branches?|streams?)\s*[:：]\s*([^\n]{2,120})/i, list: true },
+  { key: 'rounds', rx: /\brounds?\s*[:：]\s*([^\n]{2,120})/i },
   { key: 'ctc', rx: /\bctc\s*[:：]\s*([^\n]{2,60})/i },
+  { key: 'platform', rx: /\bplatform\s*[:：]\s*([^\n]{2,80})/i },
   { key: 'backlogs', rx: /\bbacklogs?\s*[:：]\s*([^\n]{2,60})/i },
   { key: 'attempts', rx: /\b(?:max\s*attempts?|attempts?)\s*[:：]\s*([^\n]{2,40})/i },
   { key: 'difficulty', rx: /\bdifficulty\s*[:：]\s*([^\n]{2,60})/i },
-  { key: 'registration_deadline', rx: /\bregistration\s*deadline\s*[:：]\s*([^\n]{2,60})/i },
+  { key: 'graduation_year', rx: /\b(?:batch|graduation\s*year|passing\s*out|class\s*of)\s*[:：]?\s*(\d{4})(?:\s*-\s*\d{2,4})?/i },
+  { key: 'internship_duration', rx: /\b(?:internship\s*(?:duration|timeline|period|tenure)|duration)\s*[:：]\s*([^\n]{2,60})/i },
+  { key: 'housing_stipend', rx: /\bhousing\s*(?:and|&)?\s*stipend\s*[:：]\s*([^\n]{2,60})/i },
+  { key: 'tentative_next_steps', rx: /\btentative\s+next\s+steps?\s*[:：]\s*([^\n]{2,200})/i },
 ];
+
+const SECTION_LABELS: { key: string; rx: RegExp }[] = [
+  { key: 'tentative_next_steps', rx: /\btentative\s+next\s+steps?\s*[:：]/i },
+  { key: 'important_notes', rx: /\bimportant\s+(?:note|notes|points|information)\s*[:：]/i },
+];
+
+function splitList(value: string): string[] {
+  return value
+    .split(/[,;•·*•\-–—]|\b(?:and|&)\b|\n/i)
+    .map((item) => cleanLabel(item).replace(/^\d+[.)]\s*/, ''))
+    .filter((item) => item.length > 1 || /^[A-Za-z]$/.test(item));
+}
+
+function extractSectionItems(body: string, rx: RegExp): string[] | undefined {
+  const match = body.match(rx);
+  if (!match) return undefined;
+
+  const start = match.index !== undefined ? match.index + match[0].length : 0;
+  const rest = body.slice(start);
+  const lines = rest.split('\n');
+  const items: string[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!items.length && !trimmed) continue;
+    if (!trimmed) break;
+    if (/^[A-Za-z][A-Za-z\s]{0,30}[:：]\s/.test(trimmed)) break;
+    const item = cleanLabel(trimmed).replace(/^[-•·*\d]+[.)\s]*/, '');
+    if (item && item.length > 1 && !/^(?:and|or)\b/i.test(item)) {
+      items.push(item);
+    }
+  }
+
+  return items.length > 0 ? items : undefined;
+}
+
+function extractRegistrationUrl(body: string): string | undefined {
+  const labeled = body.match(
+    /\b(?:registration\s*link|register\s*here|apply\s*(?:here|now)|application\s*link|sign\s*up)\s*[:：]?\s*((?:https?:\/\/)?(?:[^\s\n]{5,160}))/i
+  );
+  if (labeled) {
+    const url = labeled[1].trim();
+    if (/https?:\/\//i.test(url)) return url;
+    return `https://${url.replace(/^https?:\/\//i, '')}`;
+  }
+
+  const candidates = body.match(/https?:\/\/[^\s\n)<>"']+/gi);
+  if (!candidates) return undefined;
+
+  const valid = candidates.filter(
+    (url) =>
+      !/gmail\.com|facebook|twitter|instagram|linkedin\.com|unsubscribe|tracking|gravatar|\/tr\?|mailto:/i.test(url)
+  );
+  return valid[0];
+}
 
 function extractAdditionalDetails(
   body: string
-): Record<string, string> | undefined {
-  const details: Record<string, string> = {};
+): AdditionalDetails | undefined {
+  const details: Record<string, string | string[]> = {};
 
-  for (const { key, rx } of EXTRA_LABELS) {
+  for (const { key, rx, list } of EXTRA_LABELS) {
     const match = body.match(rx);
-    if (match && match[1].trim()) {
-      details[key] = cleanLabel(match[1]).slice(0, 120);
+    if (!match || !match[1]?.trim()) continue;
+
+    if (key === 'tentative_next_steps') {
+      const items = extractSectionItems(body, rx);
+      if (items) details[key] = items;
+      continue;
+    }
+
+    if (key === 'graduation_year') {
+      const year = match[1];
+      if (/^\d{4}$/.test(year)) details[key] = year;
+      continue;
+    }
+
+    const value = cleanLabel(match[1]).slice(0, 200);
+    if (!value) continue;
+
+    if (list && /[|,;•·]|\b(?:and|&)\b|\s{2,}/.test(value)) {
+      details[key] = splitList(value).slice(0, 20);
+    } else {
+      details[key] = value;
     }
   }
+
+  for (const { key, rx } of SECTION_LABELS) {
+    const items = extractSectionItems(body, rx);
+    if (items) details[key] = items;
+  }
+
+  const registrationUrl = extractRegistrationUrl(body);
+  if (registrationUrl) details.registration_url = registrationUrl;
 
   return Object.keys(details).length > 0 ? details : undefined;
 }
@@ -640,8 +795,8 @@ export function extractStudents(body: string): ShortlistStudent[] {
   const students: ShortlistStudent[] = [];
   const seen = new Set<string>();
   const lines = body
-    .replace(/\s+/g, ' ')
-    .split(/[;\n•·*-]+/)
+    .replace(/[ \t]+/g, ' ')
+    .split(/[\n;•·*]+/)
     .map((l) => l.trim())
     .filter(Boolean);
 
@@ -655,9 +810,10 @@ export function extractStudents(body: string): ShortlistStudent[] {
   const fallbackText = body.replace(/[ \t]+/g, ' ');
 
   for (const line of lines) {
-    // "Name - USN" | "Name: USN" | "Name (USN)" | "Name , USN"
-    const named = line.match(
-      /^([A-Za-z][A-Za-z.\s'-]{1,60}?)\s*(?:[-–—:,(]\s*|\s[-–—]\s*)?(?:\b(?:PES\d{9,13}|[0-9]{1}PE\d{2}[A-Z]{2}\d{2,4}|[A-Z]{2,4}\d{5,9})\b)/i
+    const cleaned = line.replace(/^\d+(?:[.)]\s*|\s*[-–—]\s*)/, '');
+    // "1. Name - USN" | "Name | USN" | "Name: USN" | "Name (USN)"
+    const named = cleaned.match(
+      /^([A-Za-z][A-Za-z.\s'-]{1,60}?)\s*(?:[-–—:,(|]\s*|\s[-–—|]\s*|\s[(|]\s*)?\b(PES\d{9,13}|[0-9]{1}PE\d{2}[A-Z]{2}\d{2,4}|[A-Z]{2,4}\d{5,9})\b/i
     );
     if (named) {
       const name = cleanLabel(named[1]).replace(/^[0-9.\s]+/, '');
@@ -668,7 +824,7 @@ export function extractStudents(body: string): ShortlistStudent[] {
       continue;
     }
 
-    const usnOnly = line.match(
+    const usnOnly = cleaned.match(
       /\b(PES\d{9,13}|[0-9]{1}PE\d{2}[A-Z]{2}\d{2,4}|[A-Z]{2,4}\d{5,9})\b/i
     );
     if (usnOnly) {

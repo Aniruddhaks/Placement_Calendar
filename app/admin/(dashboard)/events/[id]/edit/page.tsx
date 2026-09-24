@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation';
 import { EventForm } from '@/components/admin/event-form';
+import { JdManager } from '@/components/admin/jd-manager';
 import { getEventByIdServer } from '@/lib/events/queries';
 
 interface EditEventPageProps {
@@ -20,6 +21,7 @@ export default async function EditEventPage({ params }: EditEventPageProps) {
           Changes are visible immediately on the public tracker.
         </p>
       </div>
+      <JdManager event={event} />
       <EventForm event={event} />
     </div>
   );

@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { requireAdmin } from '@/lib/auth/session';
+import { createServiceClient } from '@/lib/supabase/service';
 import {
   createEvent,
   createShortlist,
@@ -20,6 +21,79 @@ import type {
   ShortlistInput,
   ShortlistStatus,
 } from '@/types/events';
+
+function sanitizeJdFilename(filename: string): string {
+  const base = (filename || 'job-description')
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .slice(0, 120);
+  return base || 'job-description';
+}
+
+export async function uploadEventJdAction(id: string, formData: FormData) {
+  await requireAdmin();
+  const file = formData.get('file');
+  if (!(file instanceof File) || file.size === 0) {
+    return { error: 'Choose a file to upload.' };
+  }
+  if (file.size > 20 * 1024 * 1024) {
+    return { error: 'JD must be 20 MB or smaller.' };
+  }
+
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const objectPath = `${id}/${sanitizeJdFilename(file.name)}`;
+
+  const supabase = createServiceClient();
+  const { error: uploadError } = await supabase.storage
+    .from('jds')
+    .upload(objectPath, bytes, {
+      contentType: file.type || 'application/octet-stream',
+      upsert: true,
+    });
+  if (uploadError) {
+    return { error: uploadError.message || 'Could not upload the JD.' };
+  }
+
+  const { error: updateError } = await supabase
+    .from('events')
+    .update({
+      job_description_url: objectPath,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id);
+  if (updateError) {
+    return { error: updateError.message || 'Could not save the JD.' };
+  }
+
+  revalidatePath(`/admin/events/${id}/edit`);
+  revalidatePath('/admin');
+  revalidatePath('/');
+  revalidatePath('/calendar');
+  return { success: true };
+}
+
+export async function removeEventJdAction(id: string) {
+  await requireAdmin();
+  const supabase = createServiceClient();
+
+  const { data: event } = await supabase
+    .from('events')
+    .select('job_description_url')
+    .eq('id', id)
+    .single();
+  if (event?.job_description_url) {
+    await supabase.storage.from('jds').remove([event.job_description_url]);
+  }
+
+  await supabase
+    .from('events')
+    .update({ job_description_url: null, updated_at: new Date().toISOString() })
+    .eq('id', id);
+
+  revalidatePath(`/admin/events/${id}/edit`);
+  revalidatePath('/admin');
+  revalidatePath('/');
+  revalidatePath('/calendar');
+}
 
 function emptyToNull(value: FormDataEntryValue | null): string | null {
   const text = String(value || '').trim();

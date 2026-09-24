@@ -2,6 +2,9 @@ export type EventType = 'OA' | 'TECHNICAL_INTERVIEW';
 export type EventStatus = 'draft' | 'published';
 export type ShortlistStatus = 'draft' | 'published';
 
+export type AdditionalDetailsValue = string | string[];
+export type AdditionalDetails = Record<string, AdditionalDetailsValue>;
+
 export interface PlacementEvent {
   id: string;
   company_name: string;
@@ -17,10 +20,12 @@ export interface PlacementEvent {
   stipend: string | null;
   eligibility: string | null;
   description: string | null;
-  additional_details: Record<string, string> | null;
+  additional_details: AdditionalDetails | null;
   status: EventStatus;
   source_email_id: string | null;
   dedup_key: string | null;
+  raw_email: string | null;
+  job_description_url: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -39,10 +44,12 @@ export interface PlacementEventInput {
   stipend?: string | null;
   eligibility?: string | null;
   description?: string | null;
-  additional_details?: Record<string, string> | null;
+  additional_details?: AdditionalDetails | null;
   status?: EventStatus;
   source_email_id?: string | null;
   dedup_key?: string | null;
+  raw_email?: string | null;
+  job_description_url?: string | null;
 }
 
 export interface ShortlistStudent {
