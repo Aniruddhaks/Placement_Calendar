@@ -13,19 +13,22 @@ export default async function HomePage() {
 
   try {
     events = await getUpcomingEventsServer();
-  } catch {
+  } catch (error) {
+    console.error('[HomePage] getUpcomingEventsServer failed:', error);
     events = [];
   }
 
   try {
     shortlists = await getPublishedShortlistsServer();
-  } catch {
+  } catch (error) {
+    console.error('[HomePage] getPublishedShortlistsServer failed:', error);
     shortlists = [];
   }
 
   try {
     allEvents = await getAllEventsServer();
-  } catch {
+  } catch (error) {
+    console.error('[HomePage] getAllEventsServer failed:', error);
     allEvents = [];
   }
 
