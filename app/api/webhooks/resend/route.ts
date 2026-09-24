@@ -11,12 +11,28 @@ import {
   parseShortlist,
 } from '@/lib/email-parser';
 
+export const maxDuration = 60;
+
 type PostgrestInsertError = {
   code?: string;
   message?: string;
   details?: string;
   hint?: string;
 };
+
+class ResendTimeoutError extends Error {}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new ResendTimeoutError(`Timed out after ${ms}ms`));
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timeoutId) clearTimeout(timeoutId);
+  });
+}
 
 function isUniqueViolation(error: unknown): boolean {
   return (
@@ -58,9 +74,12 @@ async function fetchReceivedEmail(
   attachments: ResendAttachmentInfo[];
 } | null> {
   try {
-    const res = await resend.emails.receiving.get(emailId, {
-      html_format: 'cid',
-    });
+    const res = await withTimeout(
+      resend.emails.receiving.get(emailId, {
+        html_format: 'cid',
+      }),
+      15_000
+    );
     if (res.error) {
       console.error(
         '[Resend Webhook] Failed to fetch received email content from Resend:',
@@ -83,10 +102,14 @@ async function fetchReceivedEmail(
         : [],
     };
   } catch (error) {
-    console.error(
-      '[Resend Webhook] Error fetching received email content:',
-      error
-    );
+    if (error instanceof ResendTimeoutError) {
+      console.error('[Resend Webhook] Resend email retrieval timed out');
+    } else {
+      console.error(
+        '[Resend Webhook] Error fetching received email content:',
+        error
+      );
+    }
     return null;
   }
 }
@@ -97,10 +120,13 @@ async function attachmentText(
   attachment: ResendAttachmentInfo
 ): Promise<string | null> {
   try {
-    const res = await resend.emails.receiving.attachments.get({
-      emailId,
-      id: attachment.id,
-    });
+    const res = await withTimeout(
+      resend.emails.receiving.attachments.get({
+        emailId,
+        id: attachment.id,
+      }),
+      15_000
+    );
     if (res.error || !res.data?.download_url) {
       console.error(
         `[Resend Webhook] Failed to fetch attachment ${attachment.filename ?? attachment.id}:`,
@@ -122,10 +148,14 @@ async function attachmentText(
     const content = await download.text();
     return content.length > 20_000 ? content.slice(0, 20_000) : content;
   } catch (error) {
-    console.error(
-      `[Resend Webhook] Error downloading attachment ${attachment.filename ?? attachment.id}:`,
-      error
-    );
+    if (error instanceof ResendTimeoutError) {
+      console.error('[Resend Webhook] Resend attachment retrieval timed out');
+    } else {
+      console.error(
+        `[Resend Webhook] Error downloading attachment ${attachment.filename ?? attachment.id}:`,
+        error
+      );
+    }
     return null;
   }
 }
