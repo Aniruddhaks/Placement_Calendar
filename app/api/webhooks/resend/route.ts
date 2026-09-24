@@ -241,14 +241,19 @@ export async function POST(request: Request) {
       received_at: receivedAt,
     });
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const rawSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!supabaseUrl || !supabaseServiceKey) {
+    if (!rawSupabaseUrl || !supabaseServiceKey) {
       console.error(
         '[Resend Webhook] Missing Supabase credentials (NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)'
       );
       return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
     }
+    const supabaseUrl = rawSupabaseUrl
+      .trim()
+      .replace(/\/rest\/v1\/?$/i, '')
+      .replace(/\/+$/, '');
+    console.log('[Resend Webhook] Supabase base URL:', supabaseUrl);
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     const sourceEmailId = emailId || payloadMessageId || 'unknown';
